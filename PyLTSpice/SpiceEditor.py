@@ -17,10 +17,10 @@ from typing import Union, Optional
 __author__ = "Nuno Canto Brum <nuno.brum@gmail.com>"
 __copyright__ = "Copyright 2020, Fribourg Switzerland"
 
-END_LINE_TERM = '\n'
+END_LINE_TERM = os.linesep
 
 # A Spice netlist can only have one of the instructions below, otherwise an error will be raised
-UNIQUE_SIMULATION_DOT_instructionS = ('.AC', '.DC', '.TRAN', 'NOISE', '.DC', '.TF')
+UNIQUE_SIMULATION_DOT_instructionS = ('.AC', '.DC', '.TRAN', 'NOISE', '.OP', '.TF')
 
 REPLACE_REGXES = {
     'B': r"^(B[VI]\w+)(\s+[\w\+\-]+){2}\s+(?P<value>.*)$",  # Behavioral source
@@ -190,25 +190,13 @@ class SpiceEditor(object):
         -------
         Nothing
         """
-        if _is_unique_instruction(instruction):
-            # Before adding new instruction, delete previously set unique instructions
-            i = 0
-            while i < len(self.netlist):
-                line = self.netlist[i]
-                if _is_unique_instruction(line):
-                    self.netlist[i] = instruction
-                    break
-                else:
-                    i += 1
-        else:
-            # check whether the instruction is already there (dummy proofing)
-            if instruction not in self.netlist:
-                # Insert before backanno instruction
-                try:
-                    line = self.netlist.index('.backanno')
-                except ValueError:
-                    line = len(self.netlist) - 2  # This is where typically the .backanno instruction is
-                self.netlist.insert(line, instruction)
+        if instruction not in self.netlist:
+            # Insert before backanno instruction
+            try:
+                line = self.netlist.index('.backanno')
+            except ValueError:
+                line = len(self.netlist) - 2  # This is where typically the .backanno instruction is
+            self.netlist.insert(line, instruction)
 
     def add_instructions(self, *instructions):
         """Adds a list of instructions to the SPICE NETLIST.
@@ -220,12 +208,13 @@ class SpiceEditor(object):
         for instruction in instructions:
             self.add_instruction(instruction)
 
-    def remove_instruction(self, *instruction):
+    def remove_instructions(self, *instructions):
         """Usage a previously added instructions.
         Example:
-            LTC.remove_instruction(".STEP run -1 1023 1")
+            LTC.remove_instructions(".STEP run -1 1023 1")
         """
-        self.netlist.remove(instruction)
+        for instruction in instructions:
+            self.netlist.remove(instruction + END_LINE_TERM)
 
     def get_parameter(self, param :str) -> str:
         """Retrieves a Parameter from the Netlist"""

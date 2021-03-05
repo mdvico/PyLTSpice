@@ -14,30 +14,36 @@
 __author__ = "Nuno Canto Brum <nuno.brum@gmail.com>"
 __copyright__ = "Copyright 2020, Fribourg Switzerland"
 
-from warnings import warn
-import subprocess
-import threading
 import logging
 import os
-import time
-from time import sleep
-import sys
 import re
+import subprocess
+import sys
+import threading
+import time
 import traceback
-from typing import Optional, Callable, Union, Any
+from pathlib import Path
+from time import sleep
+from typing import Any, Callable, Optional, Union
+from warnings import warn
+
 from PyLTSpice.SpiceEditor import SpiceEditor
 
 __all__ = ('LTCommander', 'SimCommander', 'cmdline_switches')
 
-END_LINE_TERM = '\n'
+END_LINE_TERM = os.linesep
 
 logging.basicConfig(filename='LTSpiceBatch.log', level=logging.INFO)
 
+if os.name == "nt":
+    LTspiceIV_exe = [r"C:\Program Files (x86)\LTC\LTspiceIV\scad3.exe"]
+    LTspiceXVII_exe = [r"C:\Program Files\LTC\LTspiceXVII\XVIIx64.exe"]
+elif os.name == "posix":
+    LTspiceXVII_exe = [f"{os.environ['HOME']}/.wine/drive_c/Program Files/LTC/LTspiceXVII/XVIIx64.exe"]
+else:
+    print("Unknown OS")
 
-LTspiceIV_exe = [r"C:\Program Files (x86)\LTC\LTspiceIV\scad3.exe"]
-LTspiceXVII_exe = [r"C:\Program Files\LTC\LTspiceXVII\XVIIx64.exe"]
-LTspice_arg = {'netlist': ['-netlist'], 'run': ['-b', '-Run']}
-
+LTspice_arg = {'netlist': ['-netlist'], 'run': ['-Run', '-b']}
 cmdline_switches = []
 
 # Sel existing LTC Kernel
@@ -57,7 +63,20 @@ if sys.version_info.major >= 3 and sys.version_info.minor >= 6:
     clock_function = time.process_time
 
     def run_function(command):
-        result = subprocess.run(command)
+        path, netlist = os.path.split(command[3])
+        command[3] = netlist
+        # print(f"Path where netlist is: {path}")
+        # print(f"Real path where netlist is: {os.path.realpath(path)}")
+        # print(f"CWD: {os.getcwd()}")
+        # print(f"Netlist name: {netlist}")
+        # print(f"Command: {command}")
+        # if os.path.realpath(path) != os.getcwd():
+        #     subprocess.run(f"cd {path}", shell=True)
+        #     os.chdir(path)
+            # print(f"Changed Directory to: {os.getcwd()}")
+        result = subprocess.run(command, cwd = path, capture_output = True)
+
+        # result = subprocess.run(command, capture_output = True)
         return result.returncode
 else:
     clock_function = time.clock
@@ -69,11 +88,11 @@ else:
 class RunTask(threading.Thread):
     """This is an internal Class and should not be used directly by the User."""
 
-    def __init__(self, run_no, netlis_file: str, callback: Callable[[str, str], Any]):
+    def __init__(self, run_no, netlist_file: str, callback: Callable[[str, str], Any]):
         threading.Thread.__init__(self)
         self.setName("sim%d" % run_no)
         self.run_no = run_no
-        self.netlist_file = netlis_file
+        self.netlist_file = netlist_file
         self.callback = callback
         self.retcode = -1  # Signals an error by default
 
@@ -81,6 +100,10 @@ class RunTask(threading.Thread):
         # Setting up
         logger = logging.getLogger("sim%d" % self.run_no)
         logger.setLevel(logging.INFO)
+
+        # Changing Current Directory to match the one from the netlist file
+        # netlist_parent = Path(self.netlist_file).parent
+        # os.chdir(netlist_parent)
 
         # Running the Simulation
         cmd_run = LTspice_exe + LTspice_arg.get('run') + [self.netlist_file] + cmdline_switches
@@ -103,8 +126,11 @@ class RunTask(threading.Thread):
                 netlist_radic = self.netlist_file.rstrip('.net')
                 raw_file = netlist_radic + '.raw'
                 log_file = netlist_radic + '.log'
+                # print(netlist_radic)
+                # print(raw_file)
+                # print(log_file)
                 if os.path.exists(raw_file) and os.path.exists(log_file):
-                    print("Calling the callback function")
+                    # print("Calling the callback function")
                     try:
                         self.callback(raw_file, log_file)
                     except Exception as err:
@@ -119,7 +145,7 @@ class RunTask(threading.Thread):
             logger.warning(time.asctime() + ": Simulation Failed. Time elapsed %s:%s" % (sim_time, END_LINE_TERM))
             netlist_radic = self.netlist_file.rstrip('.net')
             if os.path.exists(netlist_radic + '.log'):
-                os.rename(netlist_radic + '.log', self.netlist_radic + '.fail')
+                os.rename(netlist_radic + '.log', netlist_radic + '.fail')
 
 
 class SimCommander(SpiceEditor):
@@ -192,7 +218,11 @@ class SimCommander(SpiceEditor):
         self.circuit_path = circuit_path
         # self.circuit_file = filename
         fname, ext = os.path.splitext(filename)
-        self.circuit_radic = circuit_path + os.path.sep + fname
+        # self.circuit_radic = circuit_path + os.path.sep + fname
+        if circuit_path != "":
+            self.circuit_radic = circuit_path + os.path.sep + fname
+        else:
+            self.circuit_radic = fname
 
         self.cmdline_switches = []
         self.parallel_sims = parallel_sims
@@ -250,14 +280,14 @@ class SimCommander(SpiceEditor):
         else:
             raise ValueError("Invalid LTspice Version. Allowed versions are 4 and 17.")
 
-    def add_LTspiceRunCmdLineSwitches(self, *args) -> None:
+    def add_LTspiceRunCmdLineSwitches(self, args) -> None:
         """Used to add an extra command line argument such as -I<path> to add symbol search path or -FastAccess
         to convert the raw file into Fast Access.
         The arguments is a list of strings as is defined in the LTSpice command line documentation.
 
         Parameters
         ----------
-        *args : list of strings
+        args : list of strings
             A list of command line switches such as "-ascii" for generating a raw file in text format or "-alt" for
             setting the solver to alternate. See Command Line Switches information on LTSpice help file.
 
